@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>新春交互烟花 - 手机兼容版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        canvas { display: block; }
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 100; color: gold;
+        }
+        #btn {
+            padding: 15px 40px; font-size: 1.2rem; background: #d00;
+            color: white; border: none; border-radius: 30px; margin: 20px;
+        }
+        #logger {
+            position: absolute; top: 10px; left: 10px; color: #0f0;
+            font-size: 10px; pointer-events: none; z-index: 200;
+            max-width: 80%; word-break: break-all;
+        }
+        #v-cont {
+            position: absolute; bottom: 10px; right: 10px;
+            width: 80px; height: 110px; border: 1px solid red;
+            z-index: 10; transform: scaleX(-1); border-radius: 5px; overflow: hidden;
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+    </style>
+</head>
+<body>
+    <div id="logger">系统日志: 等待启动...</div>
+    <div id="overlay">
+        <h2>🏮 交互年味烟花</h2>
+        <p>需要摄像头权限以实现手势交互</p>
+        <button id="btn">点击开启</button>
+    </div>
+    <div id="v-cont"><video id="webcam" playsinline autoplay muted></video></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        const log = (msg) => { document.getElementById('logger').innerText += "\n" + msg; };
+        let openness = 0.5, targetOpenness = 0.5;
+
+        // 1. 初始化 AI
+        async function initHandTracking() {
+            try {
+                log("正在加载 AI 模型...");
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+                const handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" },
+                    runningMode: "VIDEO", numHands: 1
+                });
+                log("模型加载成功");
+                return handLandmarker;
+            } catch (e) { log("模型失败: " + e); }
+        }
+
+        // 2. 启动摄像头
+        async function startCamera() {
+            const video = document.getElementById('webcam');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user", width: 480, height: 640 } 
+                });
+                video.srcObject = stream;
+                return new Promise(resolve => video.onloadedmetadata = () => resolve(video));
+            } catch (e) { log("相机失败: " + e); alert("请确保使用 HTTPS 访问并允许相机权限"); }
+        }
+
+        // 3. 渲染引擎
+        function createScene() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            camera.position.z = 6;
+            const renderer = new THREE.WebGLRenderer({ antialias: false });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            const composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+            composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
+
+            const COUNT = 12000;
+            const pos = new Float32Array(COUNT * 3), tPos = new Float32Array(COUNT * 3), 
+                  cols = new Float32Array(COUNT * 3), vels = new Float32Array(COUNT * 3);
+
+            for(let i=0; i<COUNT; i++){
+                const i3 = i*3;
+                let x, y, z;
+                if(Math.random() < 0.7) { // 灯笼
+                    const u = Math.random()*6.28, v = Math.random()*3.14;
+                    x = (1.2 + Math.sin(v)*0.4) * Math.sin(v) * Math.cos(u);
+                    y = 1.6 * Math.cos(v);
+                    z = (1.2 + Math.sin(v)*0.4) * Math.sin(v) * Math.sin(u);
+                    cols[i3]=1; cols[i3+1]=0.1; cols[i3+2]=0;
+                } else { // 流苏
+                    x = (Math.random()-0.5)*0.8; y = -1.6 - Math.random()*2; z = (Math.random()-0.5)*0.8;
+                    cols[i3]=1; cols[i3+1]=0.8; cols[i3+2]=0.1;
+                }
+                tPos[i3]=x; tPos[i3+1]=y; tPos[i3+2]=z;
+                const speed = 2 + Math.random()*3;
+                const theta = Math.random()*6.28, phi = Math.random()*3.14;
+                vels[i3] = Math.sin(phi)*Math.cos(theta)*speed;
+                vels[i3+1] = Math.sin(phi)*Math.sin(theta)*speed;
+                vels[i3+2] = Math.cos(phi)*speed;
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(tPos.slice(), 3));
+            geo.setAttribute('tPos', new THREE.BufferAttribute(tPos, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+            geo.setAttribute('vel', new THREE.BufferAttribute(vels, 3));
+
+            const mat = new THREE.ShaderMaterial({
+                uniforms: { uTime: {value:0}, uOpen: {value:0.5} },
+                vertexShader: `
+                    attribute vec3 tPos; attribute vec3 color; attribute vec3 vel;
+                    varying vec3 vColor; uniform float uTime; uniform float uOpen;
+                    void main() {
+                        vColor = color;
+                        vec3 p = tPos;
+                        float ex = smoothstep(0.7, 1.0, uOpen);
+                        float co = smoothstep(0.3, 0.0, uOpen);
+                        if(ex > 0.0) {
+                            p += vel * ex * 3.0;
+                            p.y -= ex * ex * 1.5;
+                            vColor *= (1.0 - ex*0.5);
+                        }
+                        p = mix(p, vec3(0.0), co * 0.95);
+                        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+                        gl_PointSize = 15.0 * (1.0 / -mv.z);
+                        gl_Position = projectionMatrix * mv;
+                    }
+                `,
+                fragmentShader: `
+                    varying vec3 vColor;
+                    void main() {
+                        if(distance(gl_PointCoord, vec2(0.5)) > 0.5) discard;
+                        gl_FragColor = vec4(vColor, 1.0);
+                    }
+                `,
+                transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+            });
+
+            const points = new THREE.Points(geo, mat);
+            scene.add(points);
+            return { scene, composer, mat, points };
+        }
+
+        // 启动流程
+        document.getElementById('btn').onclick = async () => {
+            document.getElementById('overlay').style.display = 'none';
+            const video = await startCamera();
+            const landmarker = await initHandTracking();
+            const { composer, mat, points } = createScene();
+
+            function run() {
+                if(landmarker) {
+                    const res = landmarker.detectForVideo(video, performance.now());
+                    if(res.landmarks && res.landmarks[0]) {
+                        const wrist = res.landmarks[0][0];
+                        const tips = [4,8,12,16,20].map(i => res.landmarks[0][i]);
+                        let d = 0;
+                        tips.forEach(t => d += Math.hypot(t.x-wrist.x, t.y-wrist.y));
+                        targetOpenness = THREE.MathUtils.clamp((d/5 - 0.15)/0.3, 0, 1);
+                    }
+                }
+                openness += (targetOpenness - openness) * 0.1;
+                mat.uniforms.uOpen.value = openness;
+                mat.uniforms.uTime.value = performance.now()*0.001;
+                points.rotation.y += 0.005;
+                composer.render();
+                requestAnimationFrame(run);
+            }
+            run();
+        };
+    </script>
+</body>
+</html>
